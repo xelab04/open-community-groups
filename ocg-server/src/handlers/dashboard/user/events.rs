@@ -69,3 +69,42 @@ pub(crate) async fn prepare_list_page(
 
     Ok((filters, template))
 }
+
+pub(crate) async fn add_user(
+    CurrentUser(user): CurrentUser,
+    State(db): State<DynDB>,
+    State(notifications_manager): State<DynNotificationsManager>,
+    State(server_cfg): State<HttpServerConfig>,
+    CommunityId(community_id): CommunityId,
+    Path((_, event_id)): Path<(String, Uuid)>,
+) -> Result<impl IntoResponse, HandlerError> {
+
+    // Add the user as attendee
+    let attend_result = db.attend_event(community_id, event_id, user.user_id).await?;
+    let response = (
+        StatusCode::OK,
+        Json(json!({
+            "status": &attend_result,
+        })),
+    );
+
+    // Send out the event attendance confirmation mail
+    let notification_result = {
+        let calendar_ics = build_event_calendar_attachment(base_url, &event);
+        let template_data = EventWelcome {
+            link: link.clone(),
+            event: event.clone(),
+            theme: site_settings.theme.clone(),
+        };
+        let notification = NewNotification {
+            attachments: vec![calendar_ics],
+            kind: NotificationKind::EventWelcome,
+            recipients: vec![user.user_id],
+            template_data: Some(to_value(&template_data)?),
+        };
+        notifications_manager.enqueue(&notification).await
+    };
+
+    Ok(response)
+
+}
